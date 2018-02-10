@@ -1,5 +1,5 @@
 {
-  "name": "bitcoinjs-lib-zcash-monya",
+  "name": "@missmonacoin/bitcoinjs-lib-zcash",
   "version": "1.0.0",
   "description": "bitcoinjs-lib for mona with simple zcash support",
   "main": "./src/index.js",
