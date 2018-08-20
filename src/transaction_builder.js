@@ -494,7 +494,7 @@ TransactionBuilder.prototype.setExpiry = function (expiry) {
 TransactionBuilder.prototype.setVersionGroupId = function (versionGroupId) {
   typeforce(types.UInt32, versionGroupId)
 
-  this.tx.versionGroupId = versiongroupid
+  this.tx.versionGroupId = versionGroupId
 }
 
 TransactionBuilder.prototype.setLockTime = function (locktime) {

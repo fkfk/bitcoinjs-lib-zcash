@@ -1,6 +1,6 @@
 {
   "name": "@missmonacoin/bitcoinjs-lib-zcash",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "bitcoinjs-lib for mona with simple zcash support",
   "main": "./src/index.js",
   "engines": {
