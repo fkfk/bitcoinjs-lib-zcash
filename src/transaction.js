@@ -43,8 +43,12 @@ Transaction.ADVANCED_TRANSACTION_FLAG = 0x01
 
 var EMPTY_SCRIPT = Buffer.allocUnsafe(0)
 var EMPTY_WITNESS = []
-var ZERO = Buffer.from('0000000000000000000000000000000000000000000000000000000000000000', 'hex')
-var ONE = Buffer.from('0000000000000000000000000000000000000000000000000000000000000001', 'hex')
+function ZERO(){ // explicitly cut referrence
+  return Buffer.from('0000000000000000000000000000000000000000000000000000000000000000', 'hex')
+}
+function ONE(){
+  return Buffer.from('0000000000000000000000000000000000000000000000000000000000000001', 'hex')
+}
 var VALUE_UINT64_MAX = Buffer.from('ffffffffffffffff', 'hex')
 var BLANK_OUTPUT = {
   script: EMPTY_SCRIPT,
@@ -62,6 +66,8 @@ Transaction.PREVOUTS_HASH_PERSON = new Buffer('ZcashPrevoutHash')
 Transaction.SEQUENCE_HASH_PERSON = new Buffer('ZcashSequencHash')
 Transaction.OUTPUTS_HASH_PERSON = new Buffer('ZcashOutputsHash')
 Transaction.JOINSPLITS_HASH_PERSON = new Buffer('ZcashJSplitsHash')
+Transaction.SHIELDEDSPENDS_HASH_PERSON = new Buffer('ZcashSSpendsHash')
+Transaction.SHIELDEDOUTPUTS_HASH_PERSON = new Buffer('ZcashSOutputHash')
 Transaction.OVERWINTER_HASH_PERSON = Buffer.concat([new Buffer('ZcashSigHash'), Buffer.from('191ba85b', 'hex')])
 
 Transaction.fromBuffer = function (buffer, zcash, __noStrict) {
@@ -407,7 +413,7 @@ Transaction.prototype.hashForSignature = function (inIndex, prevOutScript, hashT
   typeforce(types.tuple(types.UInt32, types.Buffer, /* types.UInt8 */ types.Number), arguments)
 
   // https://github.com/bitcoin/bitcoin/blob/master/src/test/sighash_tests.cpp#L29
-  if (inIndex >= this.ins.length) return ONE
+  if (inIndex >= this.ins.length) return ONE()
 
   // ignore OP_CODESEPARATOR
   var ourScript = bscript.compile(bscript.decompile(prevOutScript).filter(function (x) {
@@ -481,10 +487,10 @@ Transaction.prototype.hashForZIP143 = function (inIndex, prevOutScript, value, h
   }
   function writeVarSlice (slice) { writeVarInt(slice.length); writeSlice(slice) }
 
-  var hashOutputs = ZERO
-  var hashPrevouts = ZERO
-  var hashSequence = ZERO
-  var hashJoinsplits = ZERO
+  var hashOutputs = ZERO()
+  var hashPrevouts = ZERO()
+  var hashSequence = ZERO()
+  var hashJoinsplits = ZERO()
   var h
 
   if (!(hashType & Transaction.SIGHASH_ANYONECANPAY)) {
@@ -568,6 +574,112 @@ Transaction.prototype.hashForZIP143 = function (inIndex, prevOutScript, value, h
   h.update(tbuffer)
   return Buffer.from(h.digest('hex'), 'hex')
 }
+Transaction.prototype.hashForZIP243 = function (inIndex, prevOutScript, value, hashType) {
+  typeforce(types.tuple(types.UInt32, types.Buffer, types.Satoshi, types.UInt32), arguments)
+
+  var tbuffer, toffset
+  function writeSlice (slice) { toffset += slice.copy(tbuffer, toffset) }
+  function writeUInt32 (i) { toffset = tbuffer.writeUInt32LE(i, toffset) }
+  function writeUInt64 (i) { toffset = bufferutils.writeUInt64LE(tbuffer, i, toffset) }
+  function writeVarInt (i) {
+    varuint.encode(i, tbuffer, toffset)
+    toffset += varuint.encode.bytes
+  }
+  function writeVarSlice (slice) { writeVarInt(slice.length); writeSlice(slice) }
+
+  var hashOutputs = ZERO()
+  var hashPrevouts = ZERO()
+  var hashSequence = ZERO()
+  var hashJoinsplits = ZERO()
+  var hashShieldedSpends = ZERO()
+  var hashShieldedOutputs = ZERO()
+  var valueBalance = ZERO() // What is this? Is it necessary for transparent transaction?
+  var h
+
+  if (!(hashType & Transaction.SIGHASH_ANYONECANPAY)) {
+    tbuffer = Buffer.allocUnsafe(36 * this.ins.length)
+    toffset = 0
+
+    this.ins.forEach(function (txIn) {
+      writeSlice(txIn.hash)
+      writeUInt32(txIn.index)
+    })
+
+    h = blake2b(32, null, null, Transaction.PREVOUTS_HASH_PERSON)
+    h.update(tbuffer)
+    hashPrevouts = Buffer.from(h.digest())
+  }
+
+  if (!(hashType & Transaction.SIGHASH_ANYONECANPAY) &&
+       (hashType & 0x1f) !== Transaction.SIGHASH_SINGLE &&
+       (hashType & 0x1f) !== Transaction.SIGHASH_NONE) {
+    tbuffer = Buffer.allocUnsafe(4 * this.ins.length)
+    toffset = 0
+
+    this.ins.forEach(function (txIn) {
+      writeUInt32(txIn.sequence)
+    })
+
+    h = blake2b(32, null, null, Transaction.SEQUENCE_HASH_PERSON)
+    h.update(tbuffer)
+    hashSequence = Buffer.from(h.digest())
+  }
+
+  if ((hashType & 0x1f) !== Transaction.SIGHASH_SINGLE &&
+      (hashType & 0x1f) !== Transaction.SIGHASH_NONE) {
+    var txOutsSize = this.outs.reduce(function (sum, output) {
+      return sum + 8 + varSliceSize(output.script)
+    }, 0)
+
+    tbuffer = Buffer.allocUnsafe(txOutsSize)
+    toffset = 0
+
+    this.outs.forEach(function (out) {
+      writeUInt64(out.value)
+      writeVarSlice(out.script)
+    })
+
+    h = blake2b(32, null, null, Transaction.OUTPUTS_HASH_PERSON)
+    h.update(tbuffer)
+    hashOutputs = Buffer.from(h.digest())
+  } else if ((hashType & 0x1f) === Transaction.SIGHASH_SINGLE && inIndex < this.outs.length) {
+    var output = this.outs[inIndex]
+
+    tbuffer = Buffer.allocUnsafe(8 + varSliceSize(output.script))
+    toffset = 0
+    writeUInt64(output.value)
+    writeVarSlice(output.script)
+
+    h = blake2b(32, null, null, Transaction.OUTPUTS_HASH_PERSON)
+    h.update(tbuffer)
+    hashOutputs = Buffer.from(h.digest())
+  }
+
+  tbuffer = Buffer.allocUnsafe(196 + varSliceSize(prevOutScript))
+  toffset = 0
+
+  var input = this.ins[inIndex]
+  writeUInt32(this.version + 0x80000000)
+  writeUInt32(this.versionGroupId)
+  writeSlice(hashPrevouts)
+  writeSlice(hashSequence)
+  writeSlice(hashOutputs)
+  writeSlice(hashJoinsplits)
+  writeSlice(hashShieldedSpends)
+  writeSlice(hashShieldedOutputs)
+  writeUInt32(this.locktime)
+  writeUInt32(this.expiry)
+  writeUInt32(hashType)
+  writeUInt32(valueBalance)
+  writeSlice(input.hash)
+  writeUInt32(input.index)
+  writeVarSlice(prevOutScript)
+  writeUInt64(value)
+  writeUInt32(input.sequence)
+  h = blake2b(32, null, null, Transaction.OVERWINTER_HASH_PERSON)
+  h.update(tbuffer)
+  return Buffer.from(h.digest('hex'), 'hex')
+}
 
 Transaction.prototype.hashForWitnessV0 = function (inIndex, prevOutScript, value, hashType) {
   typeforce(types.tuple(types.UInt32, types.Buffer, types.Satoshi, types.UInt32), arguments)
@@ -582,9 +694,9 @@ Transaction.prototype.hashForWitnessV0 = function (inIndex, prevOutScript, value
   }
   function writeVarSlice (slice) { writeVarInt(slice.length); writeSlice(slice) }
 
-  var hashOutputs = ZERO
-  var hashPrevouts = ZERO
-  var hashSequence = ZERO
+  var hashOutputs = ZERO()
+  var hashPrevouts = ZERO()
+  var hashSequence = ZERO()
 
   if (!(hashType & Transaction.SIGHASH_ANYONECANPAY)) {
     tbuffer = Buffer.allocUnsafe(36 * this.ins.length)

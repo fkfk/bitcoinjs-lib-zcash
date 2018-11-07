@@ -693,7 +693,7 @@ function canSign (input) {
     )
 }
 
-TransactionBuilder.prototype.sign = function (vin, keyPair, redeemScript, hashType, witnessValue, witnessScript, overwintered) {
+TransactionBuilder.prototype.sign = function (vin, keyPair, redeemScript, hashType, witnessValue, witnessScript, txversion) {
   // TODO: remove keyPair.network matching in 4.0.0
   if (keyPair.network && keyPair.network !== this.network) throw new TypeError('Inconsistent network')
   if (!this.inputs[vin]) throw new Error('No input at index: ' + vin)
@@ -724,8 +724,10 @@ TransactionBuilder.prototype.sign = function (vin, keyPair, redeemScript, hashTy
   var signatureHash
   if (input.witness) {
     signatureHash = this.tx.hashForWitnessV0(vin, input.signScript, input.value, hashType)
-  } else if (overwintered) {
+  } else if (txversion===3) {
     signatureHash = this.tx.hashForZIP143(vin, input.signScript, witnessValue, hashType)
+  } else if (txversion===4) {
+    signatureHash = this.tx.hashForZIP243(vin, input.signScript, witnessValue, hashType)
   } else {
     signatureHash = this.tx.hashForSignature(vin, input.signScript, hashType)
   }
