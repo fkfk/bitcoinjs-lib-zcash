@@ -23,7 +23,7 @@ function vectorSize (someVector) {
 }
 
 function Transaction () {
-  this.version = 3
+  this.version = 4
   this.locktime = 0
   this.ins = []
   this.outs = []
@@ -68,7 +68,7 @@ Transaction.OUTPUTS_HASH_PERSON = new Buffer('ZcashOutputsHash')
 Transaction.JOINSPLITS_HASH_PERSON = new Buffer('ZcashJSplitsHash')
 Transaction.SHIELDEDSPENDS_HASH_PERSON = new Buffer('ZcashSSpendsHash')
 Transaction.SHIELDEDOUTPUTS_HASH_PERSON = new Buffer('ZcashSOutputHash')
-Transaction.OVERWINTER_HASH_PERSON = Buffer.concat([new Buffer('ZcashSigHash'), Buffer.from('191ba85b', 'hex')])
+Transaction.OVERWINTER_HASH_PERSON = Buffer.concat([new Buffer('ZcashSigHash'), Buffer.from('76b809bb', 'hex')])
 
 Transaction.fromBuffer = function (buffer, zcash, __noStrict) {
   var offset = 0
