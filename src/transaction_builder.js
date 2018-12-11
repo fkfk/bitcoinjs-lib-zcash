@@ -533,6 +533,9 @@ TransactionBuilder.fromTransaction = function (transaction, network) {
     txb.setVersionGroupId(transaction.versionGroupId)
     txb.setExpiry(transaction.expiry)
   }
+  if (version >= 4) {
+    txb.setValueBalance(transaction.valueBalance)
+  }
 
   // Copy outputs (done first to avoid signature invalidation)
   transaction.outs.forEach(function (txOut) {
