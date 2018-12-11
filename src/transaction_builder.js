@@ -482,6 +482,12 @@ function TransactionBuilder (network, maximumFeeRate) {
   }
 }
 
+TransactionBuilder.prototype.setValueBalance = function (valueBalance) {
+  typeforce(types.Satoshi, valueBalance)
+
+  this.tx.valueBalance = valueBalance
+}
+
 TransactionBuilder.prototype.setExpiry = function (expiry) {
   typeforce(types.UInt32, expiry)
 

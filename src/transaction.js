@@ -30,6 +30,7 @@ function Transaction () {
   this.joinsplits = []
   this.versionGroupId = '0x03c48270'
   this.expiry = 0
+  this.valueBalance = 0
   this.zcash = true
   this.spendDescs = [];
   this.outputDescs = [];
@@ -482,6 +483,7 @@ Transaction.prototype.clone = function () {
   if (newTx.zcash) {
     newTx.versionGroupId = this.versionGroupId
     newTx.expiry = this.expiry
+    newTx.valueBalance = this.valueBalance
   }
   newTx.ins = this.ins.map(function (txIn) {
     return {
