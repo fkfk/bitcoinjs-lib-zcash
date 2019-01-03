@@ -485,6 +485,12 @@ function TransactionBuilder (network, maximumFeeRate) {
   }
 }
 
+TransactionBuilder.prototype.setValueBalance = function (valueBalance) {
+  typeforce(types.Satoshi, valueBalance)
+
+  this.tx.valueBalance = valueBalance
+}
+
 TransactionBuilder.prototype.setExpiry = function (expiry) {
   typeforce(types.UInt32, expiry)
 
@@ -529,6 +535,9 @@ TransactionBuilder.fromTransaction = function (transaction, network) {
   if (version >= 3) {
     txb.setVersionGroupId(transaction.versionGroupId)
     txb.setExpiry(transaction.expiry)
+  }
+  if (version >= 4) {
+    txb.setValueBalance(transaction.valueBalance)
   }
 
   // Copy outputs (done first to avoid signature invalidation)

@@ -30,7 +30,10 @@ function Transaction () {
   this.joinsplits = []
   this.versionGroupId = '0x03c48270'
   this.expiry = 0
+  this.valueBalance = 0
   this.zcash = true
+  this.spendDescs = [];
+  this.outputDescs = [];
 }
 
 Transaction.DEFAULT_SEQUENCE = 0xffffffff
@@ -62,13 +65,30 @@ Transaction.ZCASH_NOTECIPHERTEXT_SIZE = 1 + 8 + 32 + 32 + 512 + 16
 Transaction.ZCASH_G1_PREFIX_MASK = 0x02
 Transaction.ZCASH_G2_PREFIX_MASK = 0x0a
 
-Transaction.PREVOUTS_HASH_PERSON = new Buffer('ZcashPrevoutHash')
-Transaction.SEQUENCE_HASH_PERSON = new Buffer('ZcashSequencHash')
-Transaction.OUTPUTS_HASH_PERSON = new Buffer('ZcashOutputsHash')
-Transaction.JOINSPLITS_HASH_PERSON = new Buffer('ZcashJSplitsHash')
-Transaction.SHIELDEDSPENDS_HASH_PERSON = new Buffer('ZcashSSpendsHash')
-Transaction.SHIELDEDOUTPUTS_HASH_PERSON = new Buffer('ZcashSOutputHash')
-Transaction.OVERWINTER_HASH_PERSON = Buffer.concat([new Buffer('ZcashSigHash'), Buffer.from('76b809bb', 'hex')])
+Transaction.PREVOUTS_HASH_PERSON = Buffer.from('ZcashPrevoutHash')
+Transaction.SEQUENCE_HASH_PERSON = Buffer.from('ZcashSequencHash')
+Transaction.OUTPUTS_HASH_PERSON = Buffer.from('ZcashOutputsHash')
+Transaction.JOINSPLITS_HASH_PERSON = Buffer.from('ZcashJSplitsHash')
+Transaction.SHIELDEDSPENDS_HASH_PERSON = Buffer.from('ZcashSSpendsHash')
+Transaction.SHIELDEDOUTPUTS_HASH_PERSON = Buffer.from('ZcashSOutputHash')
+Transaction.OVERWINTER_HASH_PERSON = Buffer.concat([Buffer.from('ZcashSigHash'), Buffer.from('76b809bb', 'hex')])
+Transaction.SAPLING_HASH_PERSON = Buffer.concat([Buffer.from('ZcashSigHash'), Buffer.from('bb09b876', 'hex')])
+
+// Sapling note magic values, copied from src/zcash/Zcash.h
+var NOTEENCRYPTION_AUTH_BYTES = 16;
+var ZC_NOTEPLAINTEXT_LEADING = 1;
+var ZC_V_SIZE = 8;
+var ZC_RHO_SIZE = 32;
+var ZC_R_SIZE = 32;
+var ZC_MEMO_SIZE = 512;
+var ZC_DIVERSIFIER_SIZE = 11;
+var ZC_JUBJUB_POINT_SIZE = 32;
+var ZC_JUBJUB_SCALAR_SIZE = 32;
+var ZC_NOTEPLAINTEXT_SIZE = ZC_NOTEPLAINTEXT_LEADING + ZC_V_SIZE + ZC_RHO_SIZE + ZC_R_SIZE + ZC_MEMO_SIZE;
+var ZC_SAPLING_ENCPLAINTEXT_SIZE = ZC_NOTEPLAINTEXT_LEADING + ZC_DIVERSIFIER_SIZE + ZC_V_SIZE + ZC_R_SIZE + ZC_MEMO_SIZE;
+var ZC_SAPLING_OUTPLAINTEXT_SIZE = ZC_JUBJUB_POINT_SIZE + ZC_JUBJUB_SCALAR_SIZE;
+var ZC_SAPLING_ENCCIPHERTEXT_SIZE = ZC_SAPLING_ENCPLAINTEXT_SIZE + NOTEENCRYPTION_AUTH_BYTES;
+var ZC_SAPLING_OUTCIPHERTEXT_SIZE = ZC_SAPLING_OUTPLAINTEXT_SIZE + NOTEENCRYPTION_AUTH_BYTES;
 
 Transaction.fromBuffer = function (buffer, zcash, __noStrict) {
   var offset = 0
@@ -136,6 +156,29 @@ Transaction.fromBuffer = function (buffer, zcash, __noStrict) {
     }
   }
 
+  // zcash sapling
+  function readSpentDesc () {
+    var res = {};
+    res.cv = readSlice(32);
+    res.anchor = readSlice(32);
+    res.nullifier = readSlice(32);
+    res.rk = readSlice(32);
+    res.proof = readSlice(48 + 96 + 48);
+    res.spendAuthSig = readSlice(64);
+    return res;
+  }
+
+  function readOutputDesc () {
+    var res = {};
+    res.cv = readSlice(32);
+    res.cmu = readSlice(32);
+    res.ephemeralKey = readSlice(32);
+    res.encCipherText = readSlice(ZC_SAPLING_ENCCIPHERTEXT_SIZE);
+    res.outCipherText = readSlice(ZC_SAPLING_OUTCIPHERTEXT_SIZE);
+    res.proof = readSlice(48 + 96 + 48);
+    return res;
+  }
+
   var tx = new Transaction()
 
   if (zcash) {
@@ -198,6 +241,21 @@ Transaction.fromBuffer = function (buffer, zcash, __noStrict) {
     tx.expiry = readUInt32()
   }
 
+  if (tx.version >= 4 && zcash) {
+    tx.valueBalance = readUInt64();
+    var sizeSpendDescs = readVarInt();
+    for (var i = 0; i < sizeSpendDescs; i++) {
+      var spend = readSpentDesc();
+      tx.spendDescs.push(spend);
+    }
+
+    var sizeOutputDescs = readVarInt();
+    for (var i = 0; i < sizeOutputDescs; i++) {
+      var output = readOutputDesc();
+      tx.outputDescs.push(output);
+    }
+  }
+
   if (tx.version >= 2 && zcash) {
     var jsLen = readVarInt()
     for (i = 0; i < jsLen; ++i) {
@@ -218,16 +276,24 @@ Transaction.fromBuffer = function (buffer, zcash, __noStrict) {
       for (j = 0; j < Transaction.ZCASH_NUM_JS_INPUTS; j++) {
         macs.push(readSlice(32))
       }
-      // TODO what are those exactly? Can it be expressed by BigNum?
-      var zproof = {
-        gA: readCompressedG1(),
-        gAPrime: readCompressedG1(),
-        gB: readCompressedG2(),
-        gBPrime: readCompressedG1(),
-        gC: readCompressedG1(),
-        gCPrime: readCompressedG1(),
-        gK: readCompressedG1(),
-        gH: readCompressedG1()
+      var zproof = {};
+      if (tx.version <= 3) {
+        zproof = {
+          gA: readCompressedG1(),
+          gAPrime: readCompressedG1(),
+          gB: readCompressedG2(),
+          gBPrime: readCompressedG1(),
+          gC: readCompressedG1(),
+          gCPrime: readCompressedG1(),
+          gK: readCompressedG1(),
+          gH: readCompressedG1()
+        }
+      } else {
+        zproof = {
+          sA: readSlice(48),
+          sB: readSlice(96),
+          sC: readSlice(48)
+        }
       }
       var ciphertexts = []
       for (j = 0; j < Transaction.ZCASH_NUM_JS_OUTPUTS; j++) {
@@ -250,6 +316,9 @@ Transaction.fromBuffer = function (buffer, zcash, __noStrict) {
     if (jsLen > 0) {
       tx.joinsplitPubkey = readSlice(32)
       tx.joinsplitSig = readSlice(64)
+    }
+    if (tx.version >= 4 && ((tx.spendDescs.length + tx.outputDescs.length) > 0)) {
+      tx.bindingSig = readSlice(64);
     }
   }
 
@@ -338,26 +407,76 @@ Transaction.prototype.joinsplitByteLength = function () {
     return 0
   }
 
-  var pubkeySigLength = (this.joinsplits.length > 0) ? (32 + 64) : 0
-  return (
-    bufferutils.varIntSize(this.joinsplits.length) +
-    this.joinsplits.reduce(function (sum, joinsplit) {
-      return (
-        sum +
-        8 + 8 + 32 +
-        joinsplit.nullifiers.length * 32 +
-        joinsplit.commitments.length * 32 +
-        32 + 32 +
-        joinsplit.macs.length * 32 +
-        65 + 33 * 7 +
-        joinsplit.ciphertexts.length * Transaction.ZCASH_NOTECIPHERTEXT_SIZE
-      )
-    }, 0) +
-    pubkeySigLength
-  )
+  var isSaplingCompatible = this.version >= 4
+
+  var joinSplitsLen = this.joinsplits.length
+  var byteLength = 0
+  byteLength += bufferutils.varIntSize(joinSplitsLen)  // vJoinSplit
+
+  if (joinSplitsLen > 0) {
+    // Both pre and post Sapling JoinSplits are encoded with the following data:
+    // 8 vpub_old, 8 vpub_new, 32 anchor, joinSplitsLen * 32 nullifiers, joinSplitsLen * 32 commitments, 32 ephemeralKey
+    // 32 ephemeralKey, 32 randomSeed, joinsplit.macs.length * 32 vmacs
+    if (isSaplingCompatible) {
+      byteLength += 1698 * joinSplitsLen  // vJoinSplit using JSDescriptionGroth16
+    } else {
+      byteLength += 1802 * joinSplitsLen  // vJoinSplit using JSDescriptionPHGR13
+    }
+    byteLength += 32  // joinSplitPubKey
+    byteLength += 64  // joinSplitSig
+  }
+
+  return byteLength
+}
+
+Transaction.prototype.spendDescsByteLength = function () {
+  var byteLength = 0
+  byteLength += varuint.encodingLength(this.spendDescs.length)  // nShieldedSpend
+  byteLength += (384 * this.spendDescs.length)  // vShieldedSpend
+  return byteLength
+}
+
+Transaction.prototype.outputDescsByteLength = function () {
+  var byteLength = 0
+  byteLength += varuint.encodingLength(this.outputDescs.length)  // nShieldedOutput
+  byteLength += (948 * this.outputDescs.length)  // vShieldedOutput
+  return byteLength
+}
+
+Transaction.prototype.zcashTransactionByteLength = function() {
+  var isOverwinterCompatible = this.version >= 3
+  var isSaplingCompatible = this.version >= 4
+  var byteLength = 0
+  byteLength += 4  // Header
+  if (isOverwinterCompatible) {
+    byteLength += 4  // nVersionGroupId
+  }
+  byteLength += varuint.encodingLength(this.ins.length)  // tx_in_count
+  byteLength += this.ins.reduce(function (sum, input) { return sum + 40 + varSliceSize(input.script) }, 0)  // tx_in
+  byteLength += varuint.encodingLength(this.outs.length)  // tx_out_count
+  byteLength += this.outs.reduce(function (sum, output) { return sum + 8 + varSliceSize(output.script) }, 0)  // tx_out
+  byteLength += 4  // lock_time
+  if (isOverwinterCompatible) {
+    byteLength += 4  // nExpiryHeight
+  }
+  if (isSaplingCompatible) {
+    byteLength += 8  // valueBalance
+    byteLength += this.spendDescsByteLength()
+    byteLength += this.outputDescsByteLength()
+  }
+  byteLength += this.joinsplitByteLength()
+  if (isSaplingCompatible &&
+    this.spendDescs.length + this.outputDescs.length > 0) {
+    byteLength += 64  // bindingSig
+  }
+  return byteLength
 }
 
 Transaction.prototype.__byteLength = function (__allowWitness) {
+  if (this.zcash) {
+    return this.zcashTransactionByteLength();
+  }
+
   var hasWitnesses = __allowWitness && this.hasWitnesses()
 
   return (
@@ -366,9 +485,7 @@ Transaction.prototype.__byteLength = function (__allowWitness) {
     varuint.encodingLength(this.outs.length) +
     this.ins.reduce(function (sum, input) { return sum + 40 + varSliceSize(input.script) }, 0) +
     this.outs.reduce(function (sum, output) { return sum + 8 + varSliceSize(output.script) }, 0) +
-    (hasWitnesses ? this.ins.reduce(function (sum, input) { return sum + vectorSize(input.witness) }, 0) : 0) +
-    this.joinsplitByteLength() +
-    (this.version === 3 ? 12 : 0)
+    (hasWitnesses ? this.ins.reduce(function (sum, input) { return sum + vectorSize(input.witness) }, 0) : 0)
   )
 }
 
@@ -380,6 +497,7 @@ Transaction.prototype.clone = function () {
   if (newTx.zcash) {
     newTx.versionGroupId = this.versionGroupId
     newTx.expiry = this.expiry
+    newTx.valueBalance = this.valueBalance
   }
   newTx.ins = this.ins.map(function (txIn) {
     return {
@@ -436,7 +554,7 @@ Transaction.prototype.hashForSignature = function (inIndex, prevOutScript, hashT
   // SIGHASH_SINGLE: ignore all outputs, except at the same index?
   } else if ((hashType & 0x1f) === Transaction.SIGHASH_SINGLE) {
     // https://github.com/bitcoin/bitcoin/blob/master/src/test/sighash_tests.cpp#L60
-    if (inIndex >= this.outs.length) return ONE
+    if (inIndex >= this.outs.length) return ONE()
 
     // truncate outputs after
     txTmp.outs.length = inIndex + 1
@@ -574,6 +692,7 @@ Transaction.prototype.hashForZIP143 = function (inIndex, prevOutScript, value, h
   h.update(tbuffer)
   return Buffer.from(h.digest('hex'), 'hex')
 }
+
 Transaction.prototype.hashForZIP243 = function (inIndex, prevOutScript, value, hashType) {
   typeforce(types.tuple(types.UInt32, types.Buffer, types.Satoshi, types.UInt32), arguments)
 
@@ -593,7 +712,6 @@ Transaction.prototype.hashForZIP243 = function (inIndex, prevOutScript, value, h
   var hashJoinsplits = ZERO()
   var hashShieldedSpends = ZERO()
   var hashShieldedOutputs = ZERO()
-  var valueBalance = ZERO() // What is this? Is it necessary for transparent transaction?
   var h
 
   if (!(hashType & Transaction.SIGHASH_ANYONECANPAY)) {
@@ -655,7 +773,7 @@ Transaction.prototype.hashForZIP243 = function (inIndex, prevOutScript, value, h
     hashOutputs = Buffer.from(h.digest())
   }
 
-  tbuffer = Buffer.allocUnsafe(196 + varSliceSize(prevOutScript))
+  tbuffer = Buffer.allocUnsafe(268 + varSliceSize(prevOutScript))
   toffset = 0
 
   var input = this.ins[inIndex]
@@ -669,14 +787,14 @@ Transaction.prototype.hashForZIP243 = function (inIndex, prevOutScript, value, h
   writeSlice(hashShieldedOutputs)
   writeUInt32(this.locktime)
   writeUInt32(this.expiry)
+  writeUInt64(this.valueBalance)
   writeUInt32(hashType)
-  writeUInt32(valueBalance)
   writeSlice(input.hash)
   writeUInt32(input.index)
   writeVarSlice(prevOutScript)
   writeUInt64(value)
   writeUInt32(input.sequence)
-  h = blake2b(32, null, null, Transaction.OVERWINTER_HASH_PERSON)
+  h = blake2b(32, null, null, Transaction.SAPLING_HASH_PERSON)
   h.update(tbuffer)
   return Buffer.from(h.digest('hex'), 'hex')
 }
@@ -806,6 +924,25 @@ Transaction.prototype.__toBuffer = function (buffer, initialOffset, __allowWitne
     writeSlice(i.x)
   }
 
+  // zcash sapling
+  function writeSpentDesc (i) {
+    writeSlice(i.cv);
+    writeSlice(i.anchor);
+    writeSlice(i.nullifier);
+    writeSlice(i.rk);
+    writeSlice(i.proof);
+    writeSlice(i.spendAuthSig);
+  }
+
+  function writeOutputDesc (i) {
+    writeSlice(i.cv);
+    writeSlice(i.cmu);
+    writeSlice(i.ephemeralKey);
+    writeSlice(i.encCipherText);
+    writeSlice(i.outCipherText);
+    writeSlice(i.proof);
+  }
+
   if (this.version >= 3 && this.zcash) {
     writeInt32(this.version | (1 << 31))
     writeUInt32(this.versionGroupId)
@@ -852,8 +989,21 @@ Transaction.prototype.__toBuffer = function (buffer, initialOffset, __allowWitne
     writeUInt32(this.expiry)
   }
 
+  if (this.version >= 4 && this.zcash) {
+    writeUInt64(this.valueBalance);
+    writeVarInt(this.spendDescs.length);
+    for (var i = 0; i < this.spendDescs.length; i++) {
+      writeSpentDesc(this.spendDescs[i]);
+    }
+    writeVarInt(this.outputDescs.length);
+    for (var i = 0; i < this.outputDescs.length; i++) {
+      writeOutputDesc(this.outputDescs[i]);
+    }
+  }
+
   if (this.version >= 2 && this.zcash) {
     writeVarInt(this.joinsplits.length)
+    var version = this.version;
     this.joinsplits.forEach(function (joinsplit) {
       writeUInt64(joinsplit.vpubOld)
       writeUInt64(joinsplit.vpubNew)
@@ -869,14 +1019,20 @@ Transaction.prototype.__toBuffer = function (buffer, initialOffset, __allowWitne
       joinsplit.macs.forEach(function (nullifier) {
         writeSlice(nullifier)
       })
-      writeCompressedG1(joinsplit.zproof.gA)
-      writeCompressedG1(joinsplit.zproof.gAPrime)
-      writeCompressedG2(joinsplit.zproof.gB)
-      writeCompressedG1(joinsplit.zproof.gBPrime)
-      writeCompressedG1(joinsplit.zproof.gC)
-      writeCompressedG1(joinsplit.zproof.gCPrime)
-      writeCompressedG1(joinsplit.zproof.gK)
-      writeCompressedG1(joinsplit.zproof.gH)
+      if (version <= 3) {
+        writeCompressedG1(joinsplit.zproof.gA)
+        writeCompressedG1(joinsplit.zproof.gAPrime)
+        writeCompressedG2(joinsplit.zproof.gB)
+        writeCompressedG1(joinsplit.zproof.gBPrime)
+        writeCompressedG1(joinsplit.zproof.gC)
+        writeCompressedG1(joinsplit.zproof.gCPrime)
+        writeCompressedG1(joinsplit.zproof.gK)
+        writeCompressedG1(joinsplit.zproof.gH)
+      } else {
+        writeSlice(joinsplit.zproof.sA)
+        writeSlice(joinsplit.zproof.sB)
+        writeSlice(joinsplit.zproof.sC)
+      }
       joinsplit.ciphertexts.forEach(function (ciphertext) {
         writeSlice(ciphertext)
       })
@@ -884,6 +1040,9 @@ Transaction.prototype.__toBuffer = function (buffer, initialOffset, __allowWitne
     if (this.joinsplits.length > 0) {
       writeSlice(this.joinsplitPubkey)
       writeSlice(this.joinsplitSig)
+    }
+    if (this.version >= 4 && ((this.spendDescs.length + this.outputDescs.length) > 0)) {
+      writeSlice(this.bindingSig);
     }
   }
 
